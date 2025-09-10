@@ -14,8 +14,6 @@ import shutil
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timedelta
 
-from qwen_agent.tools.simple_doc_parser import df_to_md
-
 # 日志部分
 
 LOG_DIR = 'logs'
@@ -120,8 +118,7 @@ def content_analysis(idx, companyName, companySignature):
 
 # 前置库管理部分
 
-def create_industry_csv():
-    file_name = 'industry.csv'
+def create_industry_csv(file_name):
 
     if os.path.exists(file_name):
         try:
@@ -137,3 +134,73 @@ def create_industry_csv():
     df.to_csv(file_name, index=False, encoding='utf-8-sig')
     logger.info(f"行业分类库文件 {file_name} 已成功新建")
 
+
+# 需要进行分类的源文件部分
+
+def find_tsv_file_by_date(directory, date_str):
+    pattern = os.path.join(directory, f'*{date_str}.tsv')
+    files = glob.glob(pattern)
+    return files[0] if files else None
+
+def load_handled_dates(file_path='industry_model_done_dates.txt'):
+    if not os.path.exists(file_path):
+        return set()
+    with open(file_path, 'r') as f:
+        return set(line.strip() for line in f if line.strip())
+
+def save_handled_date(date_str, file_path='industry_model_done_dates.txt'):
+    with open(file_path, 'a') as f:
+        f.write(date_str + '\n')
+
+
+def open_tsv_data(file_dir, date_str=None):
+
+    if date_str is None:
+        start_date = datetime.now().date()
+    else:
+        try:
+            start_date = datetime.strptime(date_str, '%Y%m%d').date()
+        except ValueError:
+            logger.error(f"日期格式错误: {date_str}. 请提供正确的日期格式 (YYYYMMDD).")
+            return None
+
+    handled_dates = load_handled_dates()
+    logger.info(f"已处理日期: {handled_dates}")
+
+    current_date = start_date
+    while current_date.strftime('%Y%m%d') in handled_dates:
+        current_date += timedelta(days=1)
+    logger.info(f"当前处理日期: {current_date}")
+    date_str = current_date.strftime('%Y%m%d')
+
+    tsv_file = find_tsv_file_by_date(file_dir, date_str)
+
+    if not tsv_file:
+        logger.info(f"[{date_str}] 未找到TSV文件，1小时后重试...")
+        time.sleep(3600)
+        return None
+
+    logger.info(f"找到TSV文件: {tsv_file}，正在打开")
+    df = pd.read_csv(tsv_file, sep='\t', dtype=str)
+
+    if '签名' not in df.columns:
+        logger.warning('TSV文件中不包含“签名”列，跳过')
+        save_handled_date(date_str)
+        return None
+
+    return df
+
+
+if __name__ == '__main__':
+    industry_file = 'industry.csv' # 前置库文件
+    industry_name = ['教育培训', '金融', '零售']  # 需要进行分类的类别名称
+    tsv_data_path = '/data/rcsnas/zcz/5gmaap-quality-inspection/data/ChatbotList' # tsv文件路径
+    industry_model_result_path = '/home/hesihang/industry_category/output' # 模型分类结果目录
+    industry_done_remote_path = '/data/ftp/luoyang/sign/done' # 人审远程目录
+    industry_done_local_path = '/home/hesihang/industry_category/done' # 人审本地目录
+    industry_category_start_time = '' # 默认为空，表示从当前处理，如果需要确定时间，格式为20250101
+
+    while True:
+        df = open_tsv_data(tsv_data_path, industry_category_start_time)
+        if df is None:
+            continue
